@@ -10,10 +10,11 @@
  * governing permissions and limitations under the License.
  */
 
-import {calculatePosition, PositionResult} from './calculatePosition';
+import {computePosition, flip, offset as floatingOffset, Placement as FloatingPlacement, platform, shift} from '@floating-ui/dom';
 import {DOMAttributes} from '@react-types/shared';
 import {Placement, PlacementAxis, PositionProps} from '@react-types/overlays';
-import {RefObject, useCallback, useRef, useState} from 'react';
+import {PositionResult} from './calculatePosition';
+import {RefObject, useCallback, useEffect, useRef, useState} from 'react';
 import {useCloseOnScroll} from './useCloseOnScroll';
 import {useLayoutEffect, useResizeObserver} from '@react-aria/utils';
 import {useLocale} from '@react-aria/i18n';
@@ -124,39 +125,63 @@ export function useOverlayPosition(props: AriaPositionProps): PositionAria {
     arrowSize
   ];
 
-  let updatePosition = useCallback(() => {
+  let mountedRef = useRef(false);
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+    }
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [mountedRef]);
+
+  let updatePosition = useCallback(async () => {
     if (shouldUpdatePosition === false || !isOpen || !overlayRef.current || !targetRef.current || !scrollRef.current || !boundaryElement) {
       return;
     }
 
-    let position = calculatePosition({
-      placement: translateRTL(placement, direction),
-      overlayNode: overlayRef.current,
-      targetNode: targetRef.current,
-      scrollNode: scrollRef.current,
-      padding: containerPadding,
-      shouldFlip,
-      boundaryElement,
-      offset,
-      crossOffset,
-      maxHeight,
-      arrowSize,
-      arrowBoundaryOffset
+    // @ts-ignore
+    let {x, y, placement: floatingPlacement} = await computePosition(targetRef.current, overlayRef.current, {
+      placement: toFloatingUiPlacement(translateRTL(placement, direction)),
+      platform: {
+        ...platform,
+        isRTL: () => false
+      },
+      middleware: [
+        floatingOffset({mainAxis: offset, crossAxis: crossOffset}),
+        shift({padding: containerPadding}),
+        shouldFlip && flip({padding: containerPadding})
+      ]
     });
 
-    // Modify overlay styles directly so positioning happens immediately without the need of a second render
-    // This is so we don't have to delay autoFocus scrolling or delay applying preventScroll for popovers
-    Object.keys(position.position).forEach(key => (overlayRef.current as HTMLElement).style[key] = position.position[key] + 'px');
-    (overlayRef.current as HTMLElement).style.maxHeight = position.maxHeight != null ?  position.maxHeight + 'px' : undefined;
+    let position: PositionResult = {
+      placement: toAriaPlacement(floatingPlacement),
+      position: {
+        left: x,
+        top: y
+      }
+    };
 
-    // Trigger a set state for a second render anyway for arrow positioning
-    setPosition(position);
+    if (overlayRef.current) {
+      // Modify overlay styles directly so positioning happens immediately without the need of a second render
+      // This is so we don't have to delay autoFocus scrolling or delay applying preventScroll for popovers
+      Object.keys(position.position).forEach(key => (overlayRef.current as HTMLElement).style[key] = position.position[key] + 'px');
+      (overlayRef.current as HTMLElement).style.maxHeight = position.maxHeight != null ?  position.maxHeight + 'px' : undefined;
+    }
+
+    if (mountedRef.current) {
+      // Trigger a set state for a second render anyway for arrow positioning
+      setPosition(position);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
-  // Update position when anything changes
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useLayoutEffect(updatePosition, deps);
+  useLayoutEffect(() => {
+    updatePosition();
+    // Update position when anything changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
 
   // Update position on window resize
   useResize(updatePosition);
@@ -242,4 +267,64 @@ function translateRTL(position, direction) {
     return position.replace('start', 'right').replace('end', 'left');
   }
   return position.replace('start', 'left').replace('end', 'right');
+}
+
+function toAriaPlacement(placement: FloatingPlacement): PlacementAxis {
+  switch (placement) {
+    case 'top':
+    case 'top-start':
+    case 'top-end':
+      return 'top';
+    case 'right':
+    case 'right-start':
+    case 'right-end':
+      return 'right';
+    case 'bottom':
+    case 'bottom-start':
+    case 'bottom-end':
+      return 'bottom';
+    case 'left':
+    case 'left-start':
+    case 'left-end':
+      return 'left';
+  }
+}
+
+function toFloatingUiPlacement(placement: Placement): FloatingPlacement {
+  switch (placement) {
+    case 'bottom':
+      return 'bottom';
+    case 'bottom left':
+    case 'bottom start':
+      return 'bottom-start';
+    case 'bottom right':
+    case 'bottom end':
+      return 'bottom-end';
+    case 'top':
+      return 'top';
+    case 'top left':
+    case 'top start':
+      return 'top-start';
+    case 'top right':
+    case 'top end':
+      return 'top-end';
+    case 'left':
+    case 'start':
+      return 'left';
+    case 'left top':
+    case 'start top':
+      return 'left-start';
+    case 'left bottom':
+    case 'start bottom':
+      return 'left-end';
+    case 'right top':
+    case 'end top':
+      return 'right-start';
+    case 'right bottom':
+    case 'end bottom':
+      return 'right-end';
+    case 'right':
+    case 'end':
+      return 'right';
+  }
 }
